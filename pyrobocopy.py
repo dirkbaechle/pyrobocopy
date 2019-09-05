@@ -19,6 +19,28 @@ import os, stat
 import time
 import shutil
 import filecmp
+import hashlib
+
+
+def getMD5Hash(fname):
+    """
+    Return the MD5 hash value of the given file
+    """
+    hash = ''
+    try:
+        f = file(fname, 'rb')
+        m = hashlib.md5()
+        while True:
+            d = f.read(8096)
+            if not d:
+                break
+            m.update(d)
+        hash = m.hexdigest()
+        f.close()
+    except:
+        pass
+    return hash
+
 
 def usage():
     return """
@@ -32,6 +54,7 @@ Main Options:\n
 \t-d --diff         - Only report difference between sourcedir and targetdir
 \t-s, --synchronize - Synchronize content between sourcedir and targetdir
 \t-u, --update      - Update existing content between sourcedir and targetdir
+\t-x, --xupdate     - Update existing content between sourcedir and targetdir and write the patch to patchdir
 
 Additional Options:\n
 \t-p, --purge       - Purge files when synchronizing (does not purge by default).
@@ -56,6 +79,7 @@ class PyRobocopier:
 
         self.__dir1 = ''
         self.__dir2 = ''
+        self.__dir3 = ''
         self.__dcmp = None
         
         self.__copyfiles = True
@@ -90,8 +114,8 @@ class PyRobocopier:
         
         import getopt
 
-        shortargs = "supncm"
-        longargs = ["synchronize=", "update=", "purge=", "nodirection=", "create=", "modtime="]
+        shortargs = "supncmx"
+        longargs = ["synchronize=", "update=", "purge=", "nodirection=", "create=", "modtime=", "xupdate="]
 
         try:
             optlist, args = getopt.getopt( arguments, shortargs, longargs )
@@ -114,6 +138,8 @@ class PyRobocopier:
                 self.__mainfunc = self.synchronize
             elif option.lower() in ('-u', '--update'):
                 self.__mainfunc = self.update
+            elif option.lower() in ('-x', '--xupdate'):
+                self.__mainfunc = self.xupdate
             elif option.lower() in ('-d', '--diff'):
                 self.__mainfunc = self.dirdiff
             elif option.lower() in ('-p', '--purge'):
@@ -131,6 +157,8 @@ class PyRobocopier:
                     self.__dir1 = option
                 elif self.__dir2=='':
                     self.__dir2 = option
+                elif self.__dir3=='':
+                    self.__dir3 = option
                 
         if self.__dir1=='' or self.__dir2=='':
             sys.exit("Argument Error: Directory arguments not given!")
@@ -161,10 +189,10 @@ class PyRobocopier:
         self.__mainfunc()
         self.__endtime = time.time()
         
-    def __dowork(self, dir1, dir2, copyfunc = None, updatefunc = None):
+    def __dowork(self, dir1, dir2, copyfunc = None, updatefunc = None, dir3 = None):
         """ Private attribute for doing work """
         
-        print 'Source directory: ', dir1, ':'
+        #print 'Source directory: ', dir1, ':'
 
         self.__numdirs += 1
         self.__dcmp = filecmp.dircmp(dir1, dir2)
@@ -204,16 +232,23 @@ class PyRobocopier:
                 continue
 
             if stat.S_ISREG(st.st_mode):
-                if copyfunc: copyfunc(f1, dir1, dir2)
+                if copyfunc: copyfunc(f1, dir1, dir2, dir3)
             elif stat.S_ISDIR(st.st_mode):
                 fulld1 = os.path.join(dir1, f1)
                 fulld2 = os.path.join(dir2, f1)
+                fulld3 = None
+                if dir3:
+                    fulld3 = os.path.join(dir3, f1)
+                    
                 
                 if self.__creatdirs:
                     try:
                         # Copy tree
                         print 'Copying tree', fulld2
-                        shutil.copytree(fulld1, fulld2)
+                        if fulld3:
+                            shutil.copytree(fulld1, fulld3)
+                        else:
+                            shutil.copytree(fulld1, fulld2)
                         self.__numnewdirs += 1
                         print 'Done.'
                     except shutil.Error, e:
@@ -223,10 +258,6 @@ class PyRobocopier:
                         # jump to next file/dir in loop since this op failed
                         continue
 
-                # Call tail recursive
-                # if os.path.exists(fulld2):
-                #    self.__dowork(fulld1, fulld2, copyfunc, updatefunc)
-
         # common files/directories
         for f1 in self.__dcmp.common:
             try:
@@ -235,39 +266,58 @@ class PyRobocopier:
                 continue
 
             if stat.S_ISREG(st.st_mode):
-                if updatefunc: updatefunc(f1, dir1, dir2)
+                if updatefunc: updatefunc(f1, dir1, dir2, dir3)
             elif stat.S_ISDIR(st.st_mode):
                 fulld1 = os.path.join(dir1, f1)
                 fulld2 = os.path.join(dir2, f1)
+                fulld3 = None
+                if dir3:
+                    fulld3 = os.path.join(dir3, f1)
+                    
                 # Call tail recursive
-                self.__dowork(fulld1, fulld2, copyfunc, updatefunc)
+                self.__dowork(fulld1, fulld2, copyfunc, updatefunc, fulld3)
                 
-
-    def __copy(self, filename, dir1, dir2):
+    def __copy(self, filename, dir1, dir2, dir3 = None):
         """ Private function for copying a file """
 
         # NOTE: dir1 is source & dir2 is target
         if self.__copyfiles:
 
-            print 'Copying file', filename, dir1, dir2
             try:
                 if self.__copydirection== 0 or self.__copydirection == 2:  # source to target
-                    
-                    if not os.path.exists(dir2):
-                        if self.__forcecopy:
-                            os.chmod(os.path.dirname(dir2), 0777)
-                        try:
-                            os.makedirs(dir1)
-                        except OSError, e:
-                            print e
-                            self.__numdirsfld += 1
+                    if dir3:
+                        if not os.path.exists(dir3):
+                            if self.__forcecopy:
+                                os.chmod(os.path.dirname(dir3), 0777)
+                            try:
+                                os.makedirs(dir3)
+                            except OSError, e:
+                                print e
+                                self.__numdirsfld += 1
+                                
+                            if self.__forcecopy:
+                                os.chmod(dir3, 0777)
+                    else:
+                        if not os.path.exists(dir2):
+                            if self.__forcecopy:
+                                os.chmod(os.path.dirname(dir2), 0777)
+                            try:
+                                os.makedirs(dir2)
+                            except OSError, e:
+                                print e
+                                self.__numdirsfld += 1
                         
-                    if self.__forcecopy:
-                        os.chmod(dir2, 0777)
+                            if self.__forcecopy:
+                                os.chmod(dir2, 0777)
 
                     sourcefile = os.path.join(dir1, filename)
                     try:
-                        shutil.copy(sourcefile, dir2)
+                        if dir3:
+                            print 'Copying file', sourcefile, '->', dir3
+                            shutil.copy(sourcefile, dir3)
+                        else:
+                            print 'Copying file', sourcefile, '->', dir2
+                            shutil.copy(sourcefile, dir2)
                         self.__numfiles += 1
                     except (IOError, OSError), e:
                         print e
@@ -308,17 +358,20 @@ class PyRobocopier:
         return ((filest1.st_mtime > filest2.st_mtime) or \
                    (not self.__modtimeonly and (filest1.st_ctime > filest2.st_mtime)))
     
-    def __update(self, filename, dir1, dir2):
+    def __update(self, filename, dir1, dir2, dir3 = None):
         """ Private function for updating a file based on
         last time stamp of modification """
 
-        print 'Updating file', filename
+        #print 'Updating file', filename
         
         # NOTE: dir1 is source & dir2 is target        
         if self.__updatefiles:
 
             file1 = os.path.join(dir1, filename)
             file2 = os.path.join(dir2, filename)
+            file3 = None
+            if dir3:
+                file3 = os.path.join(dir3, filename)
 
             try:
                 st1 = os.stat(file1)
@@ -326,6 +379,9 @@ class PyRobocopier:
             except os.error:
                 return -1
 
+            hash1 = getMD5Hash(file1)
+            hash2 = getMD5Hash(file2)
+            
             # Update will update in both directions depending
             # on the timestamp of the file & copy-direction.
 
@@ -335,14 +391,17 @@ class PyRobocopier:
                 # source file's modification time, or creation time. Sometimes
                 # it so happens that a file's creation time is newer than it's
                 # modification time! (Seen this on windows)
-                if self.__cmptimestamps( st1, st2 ):
-                    print 'Updating file ', file2 # source to target
+                if hash1 != hash2:
                     try:
                         if self.__forcecopy:
                             os.chmod(file2, 0666)
 
                         try:
-                            shutil.copy(file1, file2)
+                            if file3:
+                                self.__copy(filename, dir1, dir3)
+                            else:
+                                print 'Updating file ', file1, '->', file2 # source to target
+                                shutil.copy(file1, file2)
                             self.__numupdates += 1
                             return 0
                         except (IOError, OSError), e:
@@ -360,13 +419,13 @@ class PyRobocopier:
                 # source file's modification time, or creation time. Sometimes
                 # it so happens that a file's creation time is newer than it's
                 # modification time! (Seen this on windows)
-                if self.__cmptimestamps( st2, st1 ):
-                    print 'Updating file ', file1 # target to source
+                if hash1 != hash2:
                     try:
                         if self.__forcecopy:
                             os.chmod(file1, 0666)
 
                         try:
+                            print 'Updating file ', file2, '->', file1 # source to target
                             shutil.copy(file2, file1)
                             self.__numupdates += 1
                             return 0
@@ -385,9 +444,13 @@ class PyRobocopier:
         """ Private function which does directory diff & copy """
         self.__dowork(dir1, dir2, self.__copy)
 
-    def __dirdiffandupdate(self, dir1, dir2):
+    def __dirdiffandupdate(self, dir1, dir2, dir3):
         """ Private function which does directory diff & update  """        
-        self.__dowork(dir1, dir2, None, self.__update)
+        self.__dowork(dir1, dir2, None, self.__update, dir3)
+
+    def __xdirdiffandupdate(self, dir1, dir2, dir3):
+        """ Private function which does directory diff & update  """        
+        self.__dowork(dir1, dir2, self.__copy, self.__update, dir3)
 
     def __dirdiffcopyandupdate(self, dir1, dir2):
         """ Private function which does directory diff, copy and update (synchro) """               
@@ -442,7 +505,22 @@ class PyRobocopier:
         self.__creatdirs = False
 
         print 'Updating directory', self.__dir2, 'from', self.__dir1 , '\n'
-        self.__dirdiffandupdate(self.__dir1, self.__dir2)
+        self.__dirdiffandupdate(self.__dir1, self.__dir2, None)
+
+    def xupdate(self):
+        """ Update will try to update the target directory
+        w.r.t source directory. Only files that are common
+        to both directories will be updated, no new files
+        or directories are created """
+
+        self.__copyfiles = True
+        self.__updatefiles = True
+        self.__purge = False
+        self.__creatdirs = True
+
+        print 'Diffing directory', self.__dir2, 'to', self.__dir1 , '\n'
+        self.__xdirdiffandupdate(self.__dir1, self.__dir2, self.__dir3)
+
 
     def dirdiff(self):
         """ Only report difference in content between two
